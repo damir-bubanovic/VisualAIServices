@@ -9,6 +9,7 @@ from PIL import Image as PILImage
 from src.models.model_loader import (
     get_model_and_classes,
     get_segmentation_model_and_preprocess,
+    get_cifar_model_and_preprocess,
 )
 from src.utils.image_utils import (
     load_image_pil,
@@ -19,6 +20,14 @@ from src.utils.image_utils import (
 # Load models once (for performance)
 _cls_model, _class_names, _cls_preprocess = get_model_and_classes()
 _seg_model, _seg_preprocess = get_segmentation_model_and_preprocess()
+
+# CIFAR-10 model (may not exist if training not yet run)
+try:
+    _cifar_model, _cifar_class_names, _cifar_preprocess = get_cifar_model_and_preprocess()
+except FileNotFoundError:
+    _cifar_model = None
+    _cifar_class_names = []
+    _cifar_preprocess = None
 
 
 def _generate_segmentation_mask(image: PILImage.Image, stem: str) -> str:
@@ -49,13 +58,13 @@ def _generate_segmentation_mask(image: PILImage.Image, stem: str) -> str:
 def analyze_image(image_path: str) -> Dict:
     """
     Perform full analysis:
-    - Classification using ResNet18
+    - Classification using ResNet18 (ImageNet)
     - Blur score using Laplacian variance
     - Foreground mask using DeepLabV3
     """
     image: PILImage.Image = load_image_pil(image_path)
 
-    # ---- Classification ----
+    # ---- Classification (ImageNet) ----
     input_tensor = _cls_preprocess(image).unsqueeze(0)  # [1, 3, H, W]
 
     with torch.no_grad():
@@ -64,11 +73,11 @@ def analyze_image(image_path: str) -> Dict:
 
     # Top-1
     top1_idx = torch.argmax(probabilities)
-    top1_label = _class_names[top1_idx]
+    top1_label = _class_names[int(top1_idx)]
 
     # Top-5
     _top5_prob, top5_idx = torch.topk(probabilities, 5)
-    topk_labels: List[str] = [_class_names[idx] for idx in top5_idx]
+    topk_labels: List[str] = [_class_names[int(idx)] for idx in top5_idx]
 
     # ---- Blur score ----
     blur_score = compute_blur_score(image_path)
@@ -82,4 +91,49 @@ def analyze_image(image_path: str) -> Dict:
         "topk_labels": topk_labels,
         "blur_score": float(blur_score),
         "mask_path": mask_path,
+    }
+
+
+def analyze_image_cifar(image_path: str) -> Dict:
+    """
+    Analyze an image using the fine-tuned CIFAR-10 model.
+
+    Returns:
+    - top1_label
+    - topk_labels (up to 5)
+    - blur_score
+    - mask_path is empty (classification-only endpoint)
+    """
+    if _cifar_model is None or _cifar_preprocess is None or not _cifar_class_names:
+        raise RuntimeError(
+            "CIFAR-10 model not available. "
+            "Run 'python -m src.training.train' first to create the checkpoint."
+        )
+
+    image: PILImage.Image = load_image_pil(image_path)
+
+    # CIFAR preprocessing
+    input_tensor = _cifar_preprocess(image).unsqueeze(0)  # [1, 3, 32, 32]
+
+    with torch.no_grad():
+        outputs = _cifar_model(input_tensor)
+        probabilities = nnf.softmax(outputs[0], dim=0)
+
+    # Top-1
+    top1_idx = torch.argmax(probabilities)
+    top1_label = _cifar_class_names[int(top1_idx)]
+
+    # Top-5 (or fewer)
+    k = min(5, len(_cifar_class_names))
+    _topk_prob, topk_idx = torch.topk(probabilities, k)
+    topk_labels: List[str] = [_cifar_class_names[int(idx)] for idx in topk_idx]
+
+    # Blur score
+    blur_score = compute_blur_score(image_path)
+
+    return {
+        "top1_label": top1_label,
+        "topk_labels": topk_labels,
+        "blur_score": float(blur_score),
+        "mask_path": "",
     }
