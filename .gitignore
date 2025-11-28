@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Data and artifacts (do NOT track in git)
+data/
+artifacts/
+outputs/
