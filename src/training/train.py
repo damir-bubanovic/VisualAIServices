@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple, List
+from typing import List, Tuple
 
 import torch
 from torch import nn, optim
@@ -9,15 +9,31 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
 
-def get_dataloaders(
-    data_dir: Path,
+def get_cifar10_dataloaders(
+    data_root: Path,
     batch_size: int = 64,
 ) -> Tuple[DataLoader, DataLoader, List[str]]:
     """
-    Prepare CIFAR-10 train/val dataloaders.
+    Prepare CIFAR-10 training and validation dataloaders.
+
+    Parameters
+    ----------
+    data_root:
+        Root directory where CIFAR-10 will be downloaded/stored.
+    batch_size:
+        Number of samples per batch.
+
+    Returns
+    -------
+    train_dataloader:
+        DataLoader for the CIFAR-10 training split.
+    val_dataloader:
+        DataLoader for the CIFAR-10 test split (used as validation here).
+    class_names:
+        List of CIFAR-10 class labels.
     """
-    # CIFAR-10 normalization (approximate)
-    transform_train = transforms.Compose(
+    # CIFAR-10 normalization statistics (approximate)
+    train_transforms = transforms.Compose(
         [
             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(32, padding=4),
@@ -29,7 +45,7 @@ def get_dataloaders(
         ]
     )
 
-    transform_val = transforms.Compose(
+    val_transforms = transforms.Compose(
         [
             transforms.ToTensor(),
             transforms.Normalize(
@@ -39,39 +55,50 @@ def get_dataloaders(
         ]
     )
 
-    train_ds = datasets.CIFAR10(
-        root=str(data_dir),
+    train_dataset = datasets.CIFAR10(
+        root=str(data_root),
         train=True,
         download=True,
-        transform=transform_train,
+        transform=train_transforms,
     )
-    val_ds = datasets.CIFAR10(
-        root=str(data_dir),
+    val_dataset = datasets.CIFAR10(
+        root=str(data_root),
         train=False,
         download=True,
-        transform=transform_val,
+        transform=val_transforms,
     )
 
-    train_loader: DataLoader = DataLoader(
-        train_ds,
+    train_dataloader: DataLoader = DataLoader(
+        train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=2,
     )
-    val_loader: DataLoader = DataLoader(
-        val_ds,
+    val_dataloader: DataLoader = DataLoader(
+        val_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=2,
     )
 
-    class_names: List[str] = list(train_ds.classes)
-    return train_loader, val_loader, class_names
+    class_names: List[str] = list(train_dataset.classes)
+    return train_dataloader, val_dataloader, class_names
 
 
-def create_model(num_classes: int) -> nn.Module:
+def create_cifar10_model(num_classes: int) -> nn.Module:
     """
-    Create a ResNet18 and replace final layer for CIFAR-10.
+    Create a ResNet18 backbone and replace the final fully-connected layer
+    for CIFAR-10 classification.
+
+    Parameters
+    ----------
+    num_classes:
+        Number of target classes (CIFAR-10 = 10).
+
+    Returns
+    -------
+    model:
+        ResNet18 model with the final layer adapted for CIFAR-10.
     """
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
     in_features = model.fc.in_features
@@ -81,16 +108,37 @@ def create_model(num_classes: int) -> nn.Module:
 
 def train_one_epoch(
     model: nn.Module,
-    loader: DataLoader,
+    dataloader: DataLoader,
     criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
 ) -> float:
+    """
+    Run a single training epoch.
+
+    Parameters
+    ----------
+    model:
+        Model to train.
+    dataloader:
+        DataLoader yielding (images, labels) batches for training.
+    criterion:
+        Loss function.
+    optimizer:
+        Optimizer instance (e.g., Adam).
+    device:
+        Torch device (CPU or CUDA).
+
+    Returns
+    -------
+    float
+        Average training loss over the epoch.
+    """
     model.train()
     running_loss = 0.0
     total_samples = 0
 
-    for images, labels in loader:
+    for images, labels in dataloader:
         images = images.to(device)
         labels = labels.to(device)
         batch_size = images.size(0)
@@ -111,102 +159,137 @@ def train_one_epoch(
     return epoch_loss
 
 
-
-
-def evaluate(
+def evaluate_model(
     model: nn.Module,
-    loader: DataLoader,
+    dataloader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-) -> tuple[float, float]:
+) -> Tuple[float, float]:
+    """
+    Evaluate the model on a validation or test dataset.
+
+    Parameters
+    ----------
+    model:
+        Model to evaluate.
+    dataloader:
+        DataLoader yielding (images, labels) batches for evaluation.
+    criterion:
+        Loss function.
+    device:
+        Torch device (CPU or CUDA).
+
+    Returns
+    -------
+    val_loss:
+        Average loss over the dataset.
+    val_accuracy:
+        Classification accuracy in the range [0.0, 1.0].
+    """
     model.eval()
     running_loss = 0.0
     total_correct = 0.0
     total_samples = 0
 
     with torch.no_grad():
-        for images, labels in loader:
+        for images, labels in dataloader:
             images = images.to(device)
             labels = labels.to(device)
             batch_size = images.size(0)
 
             outputs = model(images)
             loss = criterion(outputs, labels)
-
             running_loss += loss.item() * batch_size
 
-            _, preds = torch.max(outputs, 1)
+            # Predicted class indices
+            _, predictions = torch.max(outputs, 1)
 
-            # Count correct predictions directly on the tensor comparison
-            correct_batch = int(torch.eq(preds, labels).sum().item())
-
+            # Count correct predictions
+            correct_batch = int(torch.eq(predictions, labels).sum().item())
             total_correct += correct_batch
             total_samples += batch_size
 
     if total_samples == 0:
         return 0.0, 0.0
 
-    epoch_loss = running_loss / float(total_samples)
-    accuracy = total_correct / float(total_samples)
-    return epoch_loss, accuracy
-
-
+    val_loss = running_loss / float(total_samples)
+    val_accuracy = total_correct / float(total_samples)
+    return val_loss, val_accuracy
 
 
 def main() -> None:
     """
-    Simple training script:
-    - Downloads CIFAR-10
-    - Fine-tunes ResNet18
-    - Saves best model checkpoint + class names
+    Entry point for CIFAR-10 training.
 
-    This is for demonstrating training workflow; you can keep epochs small.
+    This script:
+    - Downloads CIFAR-10 (if not already present).
+    - Prepares train/validation dataloaders.
+    - Fine-tunes a ResNet18 model on CIFAR-10.
+    - Saves:
+        * Best model checkpoint to artifacts/models/resnet18_cifar10.pth
+        * Class names to artifacts/models/cifar10_classes.txt
     """
-    data_dir = Path("data/cifar10")
-    output_dir = Path("artifacts/models")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    data_root = Path("data/cifar10")
+    artifacts_root = Path("artifacts/models")
+    artifacts_root.mkdir(parents=True, exist_ok=True)
 
     batch_size = 64
-    num_epochs = 2  # increase if you want better accuracy
+    num_epochs = 2  # Increase for better accuracy if desired
     learning_rate = 1e-3
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    train_loader, val_loader, class_names = get_dataloaders(data_dir, batch_size)
+    # Prepare data
+    train_dataloader, val_dataloader, class_names = get_cifar10_dataloaders(
+        data_root=data_root,
+        batch_size=batch_size,
+    )
 
-    # Save class names
-    class_file = output_dir / "cifar10_classes.txt"
-    class_file.write_text("\n".join(class_names), encoding="utf-8")
-    print(f"Saved class names to: {class_file}")
+    # Save class names for inference
+    class_names_file = artifacts_root / "cifar10_classes.txt"
+    class_names_file.write_text("\n".join(class_names), encoding="utf-8")
+    print(f"Saved class names to: {class_names_file}")
 
-    model = create_model(num_classes=len(class_names))
+    # Create model and move to device
+    model = create_cifar10_model(num_classes=len(class_names))
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    best_val_acc = 0.0
-    best_model_path = output_dir / "resnet18_cifar10.pth"
+    best_val_accuracy = 0.0
+    best_model_path = artifacts_root / "resnet18_cifar10.pth"
 
-    for epoch in range(1, num_epochs + 1):
-        print(f"\nEpoch {epoch}/{num_epochs}")
+    for epoch_index in range(1, num_epochs + 1):
+        print(f"\nEpoch {epoch_index}/{num_epochs}")
 
-        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        train_loss = train_one_epoch(
+            model=model,
+            dataloader=train_dataloader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+        )
+        val_loss, val_accuracy = evaluate_model(
+            model=model,
+            dataloader=val_dataloader,
+            criterion=criterion,
+            device=device,
+        )
 
         print(f"  Train loss: {train_loss:.4f}")
         print(f"  Val loss  : {val_loss:.4f}")
-        print(f"  Val acc   : {val_acc:.4%}")
+        print(f"  Val acc   : {val_accuracy:.4%}")
 
-        # Save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # Save best model so far
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
             torch.save(model.state_dict(), best_model_path)
             print(f"  New best model saved to: {best_model_path}")
 
     print("\nTraining finished.")
-    print(f"Best validation accuracy: {best_val_acc:.4%}")
+    print(f"Best validation accuracy: {best_val_accuracy:.4%}")
     print(f"Checkpoint path: {best_model_path}")
 
 

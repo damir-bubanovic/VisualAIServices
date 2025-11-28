@@ -13,62 +13,93 @@ from torchvision.models.segmentation import (
 
 def get_model_and_classes() -> Tuple[Any, List[str], Any]:
     """
-    Load a pretrained ResNet18 model and prepare ImageNet class labels.
-    Also returns the preprocessing transform.
+    Load a pretrained ResNet18 classifier and its ImageNet class labels.
+
+    Returns
+    -------
+    model:
+        ResNet18 model in evaluation mode with ImageNet weights.
+    class_names:
+        List of ImageNet class names corresponding to the model outputs.
+    preprocess:
+        Torchvision transform used to preprocess input images for this model.
     """
-    weights = ResNet18_Weights.DEFAULT
-    model = models.resnet18(weights=weights)
-    model.eval()
+    imagenet_weights = ResNet18_Weights.DEFAULT
+    imagenet_model = models.resnet18(weights=imagenet_weights)
+    imagenet_model.eval()
 
-    class_names: List[str] = list(weights.meta["categories"])
-    preprocess = weights.transforms()
+    class_names: List[str] = list(imagenet_weights.meta["categories"])
+    preprocess = imagenet_weights.transforms()
 
-    return model, class_names, preprocess
+    return imagenet_model, class_names, preprocess
 
 
 def get_segmentation_model_and_preprocess() -> Tuple[Any, Any]:
     """
-    Load a pretrained DeepLabV3-ResNet50 model for semantic segmentation.
-    Returns the model and the preprocessing transform.
+    Load a pretrained DeepLabV3-ResNet50 segmentation model and its preprocess transform.
+
+    Returns
+    -------
+    model:
+        DeepLabV3-ResNet50 model in evaluation mode with COCO-style weights.
+    preprocess:
+        Torchvision transform used to preprocess input images for this model.
     """
-    weights = DeepLabV3_ResNet50_Weights.DEFAULT
-    model = deeplabv3_resnet50(weights=weights)
-    model.eval()
+    segmentation_weights = DeepLabV3_ResNet50_Weights.DEFAULT
+    segmentation_model = deeplabv3_resnet50(weights=segmentation_weights)
+    segmentation_model.eval()
 
-    preprocess = weights.transforms()
+    preprocess = segmentation_weights.transforms()
 
-    return model, preprocess
+    return segmentation_model, preprocess
 
 
 def get_cifar_model_and_preprocess() -> Tuple[Any, List[str], Any]:
     """
-    Load the fine-tuned ResNet18 CIFAR-10 model and its class names,
-    plus the preprocessing transform for inference.
+    Load the fine-tuned ResNet18 CIFAR-10 classifier and its class names,
+    plus the preprocessing transform used at inference time.
 
-    Requires that you have already run: python -m src.training.train
+    This function assumes that the training script has been run:
+
+        python -m src.training.train
+
+    which produces:
+        - artifacts/models/resnet18_cifar10.pth
+        - artifacts/models/cifar10_classes.txt
+
+    Returns
+    -------
+    model:
+        ResNet18 model in evaluation mode, with the final layer adapted to CIFAR-10
+        and weights loaded from the checkpoint.
+    class_names:
+        List of CIFAR-10 class names, one per output neuron.
+    preprocess:
+        Torchvision transform used to preprocess input images for this model.
     """
-    ckpt_path = Path("artifacts/models/resnet18_cifar10.pth")
-    classes_path = Path("artifacts/models/cifar10_classes.txt")
+    checkpoint_path = Path("artifacts/models/resnet18_cifar10.pth")
+    class_names_path = Path("artifacts/models/cifar10_classes.txt")
 
-    if not ckpt_path.exists() or not classes_path.exists():
+    if not checkpoint_path.exists() or not class_names_path.exists():
         raise FileNotFoundError(
             "CIFAR-10 model or class file not found. "
-            "Run 'python -m src.training.train' first."
+            "Run 'python -m src.training.train' first to create them."
         )
 
-    # Read class names
-    class_names: List[str] = classes_path.read_text(encoding="utf-8").splitlines()
+    # Load class names
+    class_names: List[str] = class_names_path.read_text(encoding="utf-8").splitlines()
 
-    # Recreate the model architecture and load weights
+    # Recreate the model architecture and load fine-tuned weights
     num_classes = len(class_names)
-    model = models.resnet18(weights=None)
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, num_classes)
-    state_dict = torch.load(ckpt_path, map_location="cpu")
-    model.load_state_dict(state_dict)
-    model.eval()
+    cifar_model = models.resnet18(weights=None)
+    in_features = cifar_model.fc.in_features
+    cifar_model.fc = nn.Linear(in_features, num_classes)
 
-    # Preprocessing similar to CIFAR-10 validation
+    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    cifar_model.load_state_dict(state_dict)
+    cifar_model.eval()
+
+    # Preprocessing similar to CIFAR-10 validation pipeline
     preprocess = transforms.Compose(
         [
             transforms.Resize((32, 32)),
@@ -80,4 +111,4 @@ def get_cifar_model_and_preprocess() -> Tuple[Any, List[str], Any]:
         ]
     )
 
-    return model, class_names, preprocess
+    return cifar_model, class_names, preprocess

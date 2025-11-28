@@ -18,10 +18,30 @@ app = FastAPI(
 
 
 class HealthResponse(BaseModel):
+    """Simple response model for the health check endpoint."""
+
     status: str
 
 
 class AnalyzeResponse(BaseModel):
+    """
+    Common response model for image analysis endpoints.
+
+    Fields
+    ------
+    filename:
+        Name of the uploaded file.
+    top1_label:
+        Most probable predicted class.
+    topk_labels:
+        List of top-k predicted class names.
+    blur_score:
+        Numeric sharpness / blur metric (higher is sharper).
+    mask_path:
+        Path to a generated segmentation mask on disk.
+        Empty string when the endpoint does not produce a mask.
+    """
+
     filename: str
     top1_label: str
     topk_labels: List[str]
@@ -29,52 +49,78 @@ class AnalyzeResponse(BaseModel):
     mask_path: str
 
 
+def _save_upload_to_tempfile(upload: UploadFile) -> str:
+    """
+    Persist an uploaded file to a temporary location on disk.
+
+    Returns
+    -------
+    Path to the created temporary file as a string.
+    """
+    contents = upload.file.read()
+    with NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+        tmp_file.write(contents)
+        return tmp_file.name
+
+
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+def health_check() -> HealthResponse:
+    """
+    Health check endpoint used for liveness monitoring.
+
+    Returns a static status payload.
+    """
     return HealthResponse(status="ok")
 
 
 @app.post("/analyze-image", response_model=AnalyzeResponse)
-async def analyze_image_endpoint(file: UploadFile = File(...)) -> AnalyzeResponse:
+async def analyze_imagenet_image(file: UploadFile = File(...)) -> AnalyzeResponse:
     """
-    Accept an uploaded image file, save it temporarily,
-    and run the ImageNet-based analyze_image() pipeline
-    (classification + blur score + segmentation mask).
-    """
-    contents = await file.read()
-    with NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
+    Analyze an image using the ImageNet-based pipeline.
 
-    result = analyze_image(tmp_path)
+    The pipeline performs:
+    - ImageNet classification (pretrained ResNet18)
+    - Blur score computation
+    - Foreground segmentation mask generation
+    """
+    # Save uploaded content to a temporary file on disk
+    contents = await file.read()
+    with NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+        tmp_file.write(contents)
+        temp_path = tmp_file.name
+
+    analysis_result = analyze_image(temp_path)
 
     return AnalyzeResponse(
         filename=file.filename,
-        top1_label=result["top1_label"],
-        topk_labels=result["topk_labels"],
-        blur_score=result["blur_score"],
-        mask_path=result["mask_path"],
+        top1_label=analysis_result["top1_label"],
+        topk_labels=analysis_result["topk_labels"],
+        blur_score=analysis_result["blur_score"],
+        mask_path=analysis_result["mask_path"],
     )
 
 
 @app.post("/analyze-image-cifar", response_model=AnalyzeResponse)
-async def analyze_image_cifar_endpoint(file: UploadFile = File(...)) -> AnalyzeResponse:
+async def analyze_cifar_image(file: UploadFile = File(...)) -> AnalyzeResponse:
     """
-    Accept an uploaded image file, save it temporarily,
-    and run the CIFAR-10 analyze_image_cifar() pipeline
-    (CIFAR-10 classification + blur score, no mask).
+    Analyze an image using the fine-tuned CIFAR-10 pipeline.
+
+    The pipeline performs:
+    - CIFAR-10 classification (fine-tuned ResNet18)
+    - Blur score computation
+    - No segmentation mask (mask_path will be an empty string)
     """
     contents = await file.read()
-    with NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        tmp.write(contents)
-        tmp_path = tmp.name
+    with NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+        tmp_file.write(contents)
+        temp_path = tmp_file.name
 
-    result = analyze_image_cifar(tmp_path)
+    analysis_result = analyze_image_cifar(temp_path)
 
     return AnalyzeResponse(
         filename=file.filename,
-        top1_label=result["top1_label"],
-        topk_labels=result["topk_labels"],
-        blur_score=result["blur_score"],
-        mask_path=result["mask_path"],
+        top1_label=analysis_result["top1_label"],
+        topk_labels=analysis_result["topk_labels"],
+        blur_score=analysis_result["blur_score"],
+        mask_path=analysis_result["mask_path"],
     )
