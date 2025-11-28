@@ -23,6 +23,8 @@ class AnalyzeResponse(BaseModel):
     top1_label: str
     topk_labels: List[str]
     blur_score: float
+    mask_path: str
+
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -49,4 +51,5 @@ async def analyze_image_endpoint(file: UploadFile = File(...)) -> AnalyzeRespons
         top1_label=result["top1_label"],
         topk_labels=result["topk_labels"],
         blur_score=result["blur_score"],
+        mask_path=result["mask_path"],
     )

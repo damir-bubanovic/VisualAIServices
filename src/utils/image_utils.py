@@ -33,3 +33,23 @@ def compute_blur_score(image_path: str) -> float:
     laplacian = cv2.Laplacian(img_gray, cv2.CV_64F)
     variance = float(laplacian.var())
     return variance
+
+
+def save_mask_image(mask: np.ndarray, stem: str) -> str:
+    """
+    Save a binary mask (0 / 255) as a PNG in outputs/masks and
+    return the path as a string.
+    """
+    mask = mask.astype(np.uint8)
+
+    # Ensure 2D
+    if mask.ndim == 3 and mask.shape[2] == 1:
+        mask = mask[:, :, 0]
+
+    output_dir = Path("outputs/masks")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    out_path = output_dir / f"{stem}_mask.png"
+    Image.fromarray(mask).save(out_path)
+
+    return str(out_path)
